@@ -1,0 +1,39 @@
+RAG TEST QUESTIONS
+
+Index the two files under documents/test before running these questions.
+
+Labels:
+- PRESENT: The answer is explicitly available in the named document.
+- ABSENT: The answer is not available and the chatbot should say that it could
+  not find relevant information in the indexed lecture documents.
+
+VELORA ISLAND (velora_island.txt)
+
+1. [PRESENT] What is the capital of Velora?
+   Expected: Arin.
+
+2. [PRESENT] How long does a train journey from Arin to Corda take?
+   Expected: 115 minutes, with a change in Belmar.
+
+3. [PRESENT] Which city has the smallest population, and what is it known for?
+   Expected: Corda; it has 31,000 residents and produces blue saffron.
+
+4. [ABSENT] Who is the president of Velora?
+
+5. [ABSENT] What is Velora's national animal?
+
+NORTHSTAR TRAVEL POLICY (northstar_travel_policy.txt)
+
+6. [PRESENT] Does a 900-dollar domestic trip require manager approval?
+   Expected: Yes, before booking.
+
+7. [PRESENT] What is the hotel limit in Harbor City?
+   Expected: 240 dollars per night.
+
+8. [PRESENT] When is business-class air travel permitted?
+   Expected: When the scheduled flight exceeds eight hours and a vice
+   president approves it.
+
+9. [ABSENT] How many vacation days do Northstar employees receive?
+
+10. [ABSENT] Does Northstar reimburse pet-care expenses during travel?

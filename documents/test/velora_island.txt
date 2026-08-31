@@ -1,0 +1,18 @@
+VELORA ISLAND REFERENCE
+
+Velora is a fictional island nation with three cities: Arin, Belmar, and
+Corda. Arin is the capital and has 82,000 residents. Belmar has 47,000
+residents and contains Velora's only international airport. Corda has 31,000
+residents and is known for producing blue saffron.
+
+Velora's rainy season runs from March through June. Visitors are prohibited
+from entering the northern forest during the rainy season because the trails
+are unsafe. The annual Lantern Festival takes place in Corda on September 18.
+
+Travel between Arin and Belmar takes 45 minutes by electric train. Travel
+between Belmar and Corda takes 70 minutes. There is no direct train between
+Arin and Corda. A traveler going from Arin to Corda by train must change trains
+in Belmar, making the total scheduled travel time 115 minutes.
+
+The national currency is the vel, abbreviated VEL. The official language is
+Veloran, although most airport employees also speak English.
