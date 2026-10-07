@@ -14,10 +14,11 @@ EMBEDDING_MODEL_ID = "BAAI/bge-small-en-v1.5"
 
 
 def _resolve_embedding_model() -> str:
-    """Prefer an explicit or cached local model before using the remote ID."""
-    if model_override := os.getenv("EMBEDDING_MODEL"):
-        return model_override
+    """Prefer a cached local copy of the model before using the remote ID.
 
+    Loading from the cached folder avoids contacting Hugging Face, which some
+    networks block even when the model is already downloaded.
+    """
     cache_home = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     model_cache = cache_home / "hub" / "models--BAAI--bge-small-en-v1.5"
     main_ref = model_cache / "refs" / "main"
@@ -32,12 +33,11 @@ def _resolve_embedding_model() -> str:
 
 
 EMBEDDING_MODEL = _resolve_embedding_model()
-LLM_MODEL = "qwen:latest"
+LLM_MODEL = "qwen2.5:7b"
 OLLAMA_URL = "http://localhost:11434"
 
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
 TOP_K = 5
 SIMILARITY_CUTOFF = 0.45
-CITATION_CHUNK_SIZE = 512
 MAX_CHAT_MESSAGES = 8

@@ -1,6 +1,7 @@
 """Load lecture documents, embed their chunks, and persist a FAISS index."""
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import faiss
 from llama_index.core import (
@@ -30,12 +31,14 @@ class IngestionResult:
 
     Attributes:
         source_files: Number of supported files found in the documents folder.
+        skipped_files: Names of files the readers could not load.
         documents: Number of document sections returned by the file readers.
         embedding_dimension: Number of values in each embedding vector.
 
     """
 
     source_files: int
+    skipped_files: tuple[str, ...]
     documents: int
     embedding_dimension: int
 
@@ -69,20 +72,32 @@ def ingest_documents(
     if not DOCUMENTS_DIR.exists():
         raise FileNotFoundError(f"Could not find '{DOCUMENTS_DIR}' folder.")
 
-    documents = SimpleDirectoryReader(
+    reader = SimpleDirectoryReader(
         input_dir=str(DOCUMENTS_DIR),
         recursive=True,
         required_exts=list(SUPPORTED_EXTENSIONS),
-    ).load_data()
+    )
+    documents = reader.load_data()
 
     if not documents:
-        raise ValueError(f"No supported documents found in '{DOCUMENTS_DIR}'.")
+        raise ValueError(f"No documents could be loaded from '{DOCUMENTS_DIR}'.")
 
-    source_files = sum(
-        path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
-        for path in DOCUMENTS_DIR.rglob("*")
+    # The reader skips files it cannot parse, so compare loaded and found files.
+    loaded_paths = {
+        Path(doc.metadata["file_path"]).resolve()
+        for doc in documents
+        if "file_path" in doc.metadata
+    }
+    skipped_files = tuple(
+        sorted(
+            Path(path).name
+            for path in reader.input_files
+            if Path(path).resolve() not in loaded_paths
+        )
     )
     print(f"Loaded {len(documents)} document(s).")
+    if skipped_files:
+        print(f"Could not read: {', '.join(skipped_files)}")
     print("Creating FAISS index...")
 
     # Derive the dimension so changing embedding models cannot mismatch FAISS.
@@ -111,7 +126,8 @@ def ingest_documents(
     index.storage_context.persist(persist_dir=str(VECTOR_STORE_DIR))
 
     return IngestionResult(
-        source_files=source_files,
+        source_files=len(reader.input_files),
+        skipped_files=skipped_files,
         documents=len(documents),
         embedding_dimension=embedding_dimension,
     )
@@ -126,6 +142,8 @@ def main() -> None:
     print("Ingestion complete!")
     print("========================================")
     print(f"Source files:  {result.source_files}")
+    if result.skipped_files:
+        print(f"Skipped:       {', '.join(result.skipped_files)}")
     print(f"Documents:     {result.documents}")
     print(f"Embedding:     {EMBEDDING_MODEL}")
     print(f"Dimensions:    {result.embedding_dimension}")

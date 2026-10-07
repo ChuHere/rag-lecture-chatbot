@@ -50,7 +50,12 @@ On Apple Silicon with Homebrew, the Python executable may be:
 
 ### 2. Install and prepare Ollama
 
-Install Ollama from [ollama.com](https://ollama.com/).
+Install Ollama from [ollama.com](https://ollama.com/), then download the
+language model:
+
+```bash
+ollama pull qwen2.5:7b
+```
 
 The Ollama server must be running while the chatbot is in use.
 
@@ -70,21 +75,6 @@ http://127.0.0.1:7860
 Use the **Documents** panel to select lecture files and click **Upload and re-index**. When indexing completes, you can ask questions in the chat.
 
 The first run may take longer because the BGE embedding model is downloaded.
-
-If Hugging Face is unavailable after the model has been cached, start the app
-in offline mode:
-
-```bash
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python app.py
-```
-
-The configuration automatically resolves a downloaded
-`BAAI/bge-small-en-v1.5` snapshot from the standard Hugging Face cache. You can
-also point to a manually copied model directory:
-
-```bash
-EMBEDDING_MODEL=/absolute/path/to/bge-small-en-v1.5 python app.py
-```
 
 ## Index documents from the terminal
 

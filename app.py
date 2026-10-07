@@ -65,10 +65,8 @@ def _save_uploads(files: list[str] | None) -> list[str]:
     saved_files = []
 
     for source in uploaded_paths:
-        destination = DOCUMENTS_DIR / source.name
-        if source.resolve() != destination.resolve():
-            shutil.copy2(source, destination)
-        saved_files.append(destination.name)
+        shutil.copy2(source, DOCUMENTS_DIR / source.name)
+        saved_files.append(source.name)
 
     return saved_files
 
@@ -87,10 +85,16 @@ def _reindex() -> str:
     # Reuse the model loaded by rag.py instead of loading BGE a second time.
     result = ingest_documents(embed_model=embed_model)
     reload_index()
-    return (
-        f"✅ Indexed **{result.source_files} file(s)** "
+
+    indexed = result.source_files - len(result.skipped_files)
+    status = (
+        f"✅ Indexed **{indexed} file(s)** "
         f"into **{result.documents} document section(s)**."
     )
+    if result.skipped_files:
+        names = ", ".join(f"`{name}`" for name in result.skipped_files)
+        status += f"\n\n⚠️ Could not read: {names}"
+    return status
 
 
 def upload_and_reindex(files: list[str] | None) -> tuple[str, None]:
@@ -153,7 +157,6 @@ with gr.Blocks() as demo:
                     placeholder="Ask something about your documents...",
                     container=True,
                 ),
-                concurrency_limit=1,
             )
 
         with gr.Column(scale=1):
@@ -168,16 +171,17 @@ with gr.Blocks() as demo:
             reindex_button = gr.Button("Re-index existing documents")
             status = gr.Markdown(initial_status)
 
+    # A shared concurrency_id stops both buttons rebuilding the index at once.
     upload_button.click(
         fn=upload_and_reindex,
         inputs=uploads,
         outputs=[status, uploads],
-        concurrency_limit=1,
+        concurrency_id="indexing",
     )
     reindex_button.click(
         fn=reindex_existing,
         outputs=status,
-        concurrency_limit=1,
+        concurrency_id="indexing",
     )
 
 # Serialize expensive local-model and re-indexing work.

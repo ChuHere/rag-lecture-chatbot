@@ -1,8 +1,8 @@
 """Load the lecture index and answer questions with local retrieval and Qwen."""
 
+import re
 from collections.abc import Iterator, Sequence
 from pathlib import Path
-from threading import RLock
 from typing import Any
 
 from llama_index.core import (
@@ -19,7 +19,6 @@ from llama_index.llms.ollama import Ollama
 from llama_index.vector_stores.faiss import FaissVectorStore
 
 from config import (
-    CITATION_CHUNK_SIZE,
     EMBEDDING_MODEL,
     LLM_MODEL,
     MAX_CHAT_MESSAGES,
@@ -27,6 +26,11 @@ from config import (
     SIMILARITY_CUTOFF,
     TOP_K,
     VECTOR_STORE_DIR,
+)
+from prompts import (
+    CITATION_QA_TEMPLATE,
+    CITATION_REFINE_TEMPLATE,
+    NO_RELEVANT_CONTEXT_MESSAGE,
 )
 
 print("Loading embedding model...")
@@ -41,30 +45,21 @@ llm = Ollama(
     model=LLM_MODEL,
     base_url=OLLAMA_URL,
     request_timeout=120.0,
-    temperature=0.1,
+    temperature=0.0,
 )
 Settings.llm = llm
 
-_index_lock = RLock()
+# Replaced as a whole by reload_index(), so readers always see a complete engine.
 query_engine: CitationQueryEngine | None = None
-streaming_query_engine: CitationQueryEngine | None = None
 
 EMPTY_RESPONSE = "Empty Response"
-NO_RELEVANT_CONTEXT_MESSAGE = (
-    "I couldn't find relevant information in the indexed lecture documents."
-)
 
 
-def _create_query_engine(
-    index: Any,
-    *,
-    streaming: bool,
-) -> CitationQueryEngine:
-    """Create a relevance-filtered citation query engine.
+def _create_query_engine(index: Any) -> CitationQueryEngine:
+    """Create a relevance-filtered, streaming citation query engine.
 
     Args:
         index: Loaded LlamaIndex vector index.
-        streaming: Whether Qwen should return generated text incrementally.
 
     Returns:
         A query engine configured for retrieval, filtering, and citations.
@@ -74,30 +69,29 @@ def _create_query_engine(
         index,
         llm=llm,
         similarity_top_k=TOP_K,
-        citation_chunk_size=CITATION_CHUNK_SIZE,
+        citation_qa_template=CITATION_QA_TEMPLATE,
+        citation_refine_template=CITATION_REFINE_TEMPLATE,
         node_postprocessors=[
             SimilarityPostprocessor(similarity_cutoff=SIMILARITY_CUTOFF)
         ],
-        streaming=streaming,
+        streaming=True,
     )
 
 
 def reload_index() -> None:
-    """Load the persisted FAISS index and replace the active query engines.
+    """Load the persisted FAISS index and replace the active query engine.
 
-    If no persisted index exists, both engine references are cleared so the
-    Gradio application can still start and offer document uploads.
+    If no persisted index exists, the engine is cleared so the Gradio
+    application can still start and offer document uploads.
 
     Raises:
         ValueError: If persisted LlamaIndex data cannot reconstruct an index.
 
     """
-    global query_engine, streaming_query_engine
+    global query_engine
 
     if not VECTOR_STORE_DIR.exists():
-        with _index_lock:
-            query_engine = None
-            streaming_query_engine = None
+        query_engine = None
         return
 
     print("Loading FAISS index...")
@@ -106,27 +100,16 @@ def reload_index() -> None:
         vector_store=vector_store,
         persist_dir=str(VECTOR_STORE_DIR),
     )
-    index = load_index_from_storage(storage_context)
-    new_query_engine = _create_query_engine(index, streaming=False)
-    new_streaming_query_engine = _create_query_engine(index, streaming=True)
-
-    # Swap both engines together so requests never observe a partial reload.
-    with _index_lock:
-        query_engine = new_query_engine
-        streaming_query_engine = new_streaming_query_engine
+    query_engine = _create_query_engine(load_index_from_storage(storage_context))
 
 
 def index_is_ready() -> bool:
-    """Return whether a non-streaming query engine is currently loaded."""
-    with _index_lock:
-        return query_engine is not None
+    """Return whether a query engine is currently loaded."""
+    return query_engine is not None
 
 
-def _get_query_engine(*, streaming: bool) -> CitationQueryEngine:
-    """Return the requested active query engine.
-
-    Args:
-        streaming: Select the streaming engine when true.
+def _get_query_engine() -> CitationQueryEngine:
+    """Return the active query engine.
 
     Returns:
         The currently loaded citation query engine.
@@ -135,9 +118,7 @@ def _get_query_engine(*, streaming: bool) -> CitationQueryEngine:
         FileNotFoundError: If documents have not been indexed yet.
 
     """
-    with _index_lock:
-        engine = streaming_query_engine if streaming else query_engine
-
+    engine = query_engine
     if engine is None:
         raise FileNotFoundError(
             f"No index found in '{VECTOR_STORE_DIR}'. Upload documents and "
@@ -153,50 +134,44 @@ reload_index()
 def _to_chat_messages(history: Sequence[Any] | None) -> list[ChatMessage]:
     """Convert recent Gradio history into LlamaIndex chat messages.
 
-    Both Gradio's current dictionary format and its older pair format are
-    supported.
-
     Args:
-        history: Previous messages from the current Gradio session.
+        history: Previous ``{"role", "content"}`` messages from Gradio.
 
     Returns:
         At most ``MAX_CHAT_MESSAGES`` converted user and assistant messages.
 
     """
-    messages: list[ChatMessage] = []
-
     # Bound the history to control prompt size and local-model latency.
-    for item in (history or [])[-MAX_CHAT_MESSAGES:]:
-        if isinstance(item, dict):
-            role = item.get("role")
-            content = item.get("content")
-            if role in {"user", "assistant"} and isinstance(content, str):
-                messages.append(ChatMessage(role=role, content=content))
-        elif isinstance(item, (list, tuple)) and len(item) == 2:
-            user_message, assistant_message = item
-            if isinstance(user_message, str):
-                messages.append(ChatMessage(role="user", content=user_message))
-            if isinstance(assistant_message, str):
-                messages.append(
-                    ChatMessage(role="assistant", content=assistant_message)
-                )
-
-    return messages
+    return [
+        ChatMessage(role=item["role"], content=item["content"])
+        for item in (history or [])[-MAX_CHAT_MESSAGES:]
+        if item.get("role") in {"user", "assistant"}
+        and isinstance(item.get("content"), str)
+    ]
 
 
-def _format_sources(source_nodes: Sequence[Any]) -> str:
-    """Format retrieved node metadata as a Markdown citation list.
+def _format_sources(source_nodes: Sequence[Any], answer: str) -> str:
+    """Format the sources cited in an answer as a Markdown list.
+
+    Retrieval always returns up to ``TOP_K`` chunks, including weak matches the
+    answer never uses, so only sources referenced as ``[n]`` are listed. Their
+    original numbers are kept so they match the citations in the answer.
 
     Args:
         source_nodes: Nodes used by the citation query engine.
+        answer: The generated answer containing citations such as ``[1]``.
 
     Returns:
-        A Markdown source section, or an empty string when no sources exist.
+        A Markdown source section, or an empty string when nothing is cited.
 
     """
+    cited = {int(number) for number in re.findall(r"\[(\d+)\]", answer)}
     sources = []
 
     for number, source_node in enumerate(source_nodes, start=1):
+        if number not in cited:
+            continue
+
         metadata = source_node.node.metadata
         file_name = metadata.get("file_name")
         if not file_name and metadata.get("file_path"):
@@ -214,39 +189,17 @@ def _format_sources(source_nodes: Sequence[Any]) -> str:
 
 
 def _is_empty_response(answer: str) -> bool:
-    """Return whether LlamaIndex reported that retrieval found no usable nodes."""
-    return not answer.strip() or answer.strip() == EMPTY_RESPONSE
+    """Return whether no grounded answer was produced.
 
-
-def ask(question: str, history: Sequence[Any] | None = None) -> str:
-    """Return one complete cited answer for a question.
-
-    Args:
-        question: The user's latest question.
-        history: Optional conversation history used to resolve follow-ups.
-
-    Returns:
-        The complete generated answer followed by its source list.
-
-    Raises:
-        FileNotFoundError: If no document index is loaded.
-
+    This covers LlamaIndex's placeholder when retrieval finds no usable nodes,
+    and the refusal sentence the grounding prompt asks the model to use.
     """
-    # A per-request engine prevents conversation memory leaking between users.
-    chat_engine = CondenseQuestionChatEngine.from_defaults(
-        query_engine=_get_query_engine(streaming=False),
-        llm=llm,
-        chat_history=_to_chat_messages(history),
+    text = answer.strip()
+    return (
+        not text
+        or text == EMPTY_RESPONSE
+        or "couldn't find relevant information" in text.lower()
     )
-    response = chat_engine.chat(
-        question,
-    )
-    answer = response.response.strip()
-
-    if _is_empty_response(answer):
-        return NO_RELEVANT_CONTEXT_MESSAGE
-
-    return answer + _format_sources(response.source_nodes)
 
 
 def stream_answer(
@@ -266,8 +219,9 @@ def stream_answer(
         FileNotFoundError: If no document index is loaded.
 
     """
+    # A per-request engine prevents conversation memory leaking between users.
     chat_engine = CondenseQuestionChatEngine.from_defaults(
-        query_engine=_get_query_engine(streaming=True),
+        query_engine=_get_query_engine(),
         llm=llm,
         chat_history=_to_chat_messages(history),
     )
@@ -286,7 +240,7 @@ def stream_answer(
         yield NO_RELEVANT_CONTEXT_MESSAGE
         return
 
-    sources = _format_sources(response.source_nodes)
+    sources = _format_sources(response.source_nodes, answer)
     if sources:
         yield answer + sources
 
@@ -316,7 +270,10 @@ def main() -> None:
             print("Goodbye!")
             break
 
-        answer = ask(question)
+        # The last update is the complete answer, including its sources.
+        answer = ""
+        for answer in stream_answer(question):
+            pass
 
         print()
         print("Qwen:")
